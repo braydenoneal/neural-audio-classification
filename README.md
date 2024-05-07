@@ -98,6 +98,7 @@ With different datasets and more computation time/speed, the ideas in this proje
 * Different types of sound (music, animals, etc.)
 * Recurrent classification (e.g., classifying a string of digits from a single audio file)
 * An end-user application for interfacing with the neural network
+* Audio input of varying length (without squeezing them into the same size)
 
 All source code is available under the `src` directory.
 
