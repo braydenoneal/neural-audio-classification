@@ -18,8 +18,8 @@ training_data, testing_data = random_split(
     torchvision.datasets.ImageFolder(root='images', transform=transform), (24_000, 6_000)
 )
 
-training_dataloader = DataLoader(training_data, batch_size=BATCH_SIZE, shuffle=True)
-testing_dataloader = DataLoader(testing_data, batch_size=BATCH_SIZE, shuffle=True)
+training_data_loader = DataLoader(training_data, batch_size=BATCH_SIZE, shuffle=True)
+testing_data_loader = DataLoader(testing_data, batch_size=BATCH_SIZE, shuffle=True)
 
 device = 'cuda' if torch.cuda.is_available() else 'mps' if mps.is_available() else 'cpu'
 
@@ -50,12 +50,12 @@ criterion = nn.NLLLoss()
 optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=MOMENTUM)
 
 
-def train(dataloader, model, loss_fn, optimizer):
+def train(data_loader, model, loss_fn, optimizer):
     model.train()
 
-    size = len(dataloader.dataset)
+    size = len(data_loader.dataset)
 
-    for batch, (images, labels) in enumerate(dataloader):
+    for batch, (images, labels) in enumerate(data_loader):
         images = images.to(device)
         labels = labels.to(device)
 
@@ -69,14 +69,14 @@ def train(dataloader, model, loss_fn, optimizer):
         print(f'loss: {loss.item():>7f}  [{(batch + 1) * len(images):>5d}/{size}]')
 
 
-def test(dataloader, model, loss_fn):
+def test(data_loader, model, loss_fn):
     model.eval()
 
     test_loss = 0
     correct = 0
 
     with torch.no_grad():
-        for images, labels in dataloader:
+        for images, labels in data_loader:
             images = images.to(device)
             labels = labels.to(device)
 
@@ -88,8 +88,8 @@ def test(dataloader, model, loss_fn):
                 if torch.argmax(prediction).item() == label.item():
                     correct += 1
 
-    test_loss /= len(dataloader)
-    correct /= len(dataloader.dataset)
+    test_loss /= len(data_loader)
+    correct /= len(data_loader.dataset)
 
     print(f'Test Error: \n Accuracy: {(100 * correct):>0.1f}%, Avg loss: {test_loss:>8f} \n')
 
@@ -98,9 +98,31 @@ print(f'Training on {device}\n')
 
 for epoch in range(EPOCHS):
     print(f'Epoch {epoch + 1}\n-------------------------------')
-    train(training_dataloader, model, criterion, optimizer)
-    test(testing_dataloader, model, criterion)
+    train(training_data_loader, model, criterion, optimizer)
+    test(testing_data_loader, model, criterion)
 
 print('Done!')
 
 torch.jit.script(model).save('models/07.pt')
+
+"""
+# Torch-Light library example
+import torchlight
+
+data = torchlight.data.ImageFolder(
+    folder_path='images',
+    train_test_split=0.8,
+)
+
+trainer = torchlight.Trainer(data)
+
+trainer.options.learningRate(1e-3)
+trainer.options.momentum(0.9)
+trainer.options.optimize()
+trainer.options.criterion(torchlight.NLLLoss())
+trainer.options.standardize()
+trainer.options.graph()
+
+trainer.train()
+trainer.save('models')
+"""
