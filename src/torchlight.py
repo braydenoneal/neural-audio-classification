@@ -1,12 +1,14 @@
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch import nn
+from torch.utils.data import DataLoader, random_split
 import torchvision
 from torchvision import transforms
 
 
 class ImageFolder:
     def __init__(self):
-        self.data = list[DataLoader]
+        self.data: DataLoader | None = None
+        self.testing_data: DataLoader | None = None
         self.root: str | None = None
         self.image_width: int | None = None
         self.image_height: int | None = None
@@ -50,7 +52,8 @@ class ImageFolder:
                 training_data_loader.batch_size = self._batch_size
                 testing_data_loader.batch_size = self._batch_size
 
-            self.data = [training_data_loader, testing_data_loader]
+            self.data = training_data_loader
+            self.testing_data = testing_data_loader
 
         else:
             data_loader = DataLoader(dataset, shuffle=True)
@@ -58,23 +61,12 @@ class ImageFolder:
             if self._batch_size is not None:
                 data_loader.batch_size = self._batch_size
 
-            self.data = [data_loader]
+            self.data = data_loader
 
 
 class Trainer:
     def __init__(self):
-        self.options = TrainerOptions()
-
-    def train(self):
-        print(self.options.epochs)
-
-    def save(self, path):
-        print(f'{self.options.data} {path}')
-
-
-class TrainerOptions:
-    def __init__(self):
-        self._data = None
+        self._data: ImageFolder | None = None
         self._model: torch.nn.Module | None = None
         self._criterion = None
         self._epochs: int | None = None
@@ -107,8 +99,87 @@ class TrainerOptions:
     def graph(self, graph=True):
         self._graph = graph
 
+    def train(self):
+        device = (
+            'cuda' if torch.cuda.is_available() else
+            'mps' if torch.backends.mps.is_available() else
+            'cpu'
+        )
+
+        optimizer = torch.optim.SGD(
+            self._model.parameters(),
+            lr=self._learning_rate,
+            momentum=self._momentum
+        )
+
+        for epoch in range(self._epochs):
+            self._model.train()
+
+            for inputs, outputs in self._data.data:
+                inputs = inputs.to(device)
+                outputs = outputs.to(device)
+
+                predictions = self._model(inputs)
+                loss = self._criterion(predictions, outputs)
+
+                loss.backward()
+
+                if self._optimize:
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                print(f'Loss: {loss}')
+
+            self._model.eval()
+
+            if self._data.testing_data:
+                pass
+
+            loss = 0
+            correct = 0
+
+            with torch.no_grad():
+                for inputs, outputs in self._data.testing_data:
+                    inputs = inputs.to(device)
+                    outputs = outputs.to(device)
+
+                    predictions = self._model(inputs)
+
+                    loss += self._criterion(predictions, outputs).item()
+
+                    for prediction, label in zip(predictions, outputs):
+                        if torch.argmax(prediction).item() == label.item():
+                            correct += 1
+
+            print(f'Loss: {loss}, Correct: {correct}')
+
+    def save(self, path):
+        torch.jit.script(self._model).save(path)
+
 
 if __name__ == '__main__':
+    IMAGE_SIZE = 100
+
+    class ConvolutionalModel(nn.Module):
+        def __init__(self):
+            super(ConvolutionalModel, self).__init__()
+
+            self.network = nn.Sequential(
+                nn.Conv2d(in_channels=3, out_channels=20, kernel_size=5, stride=1, padding=2),
+                nn.ReLU(),
+                nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
+                nn.Conv2d(in_channels=20, out_channels=50, kernel_size=5, stride=1, padding=2),
+                nn.ReLU(),
+                nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
+                nn.Flatten(),
+                nn.Linear(50 * (IMAGE_SIZE // 2 // 2) ** 2, IMAGE_SIZE * IMAGE_SIZE),
+                nn.Linear(IMAGE_SIZE * IMAGE_SIZE, 10),
+                nn.LogSoftmax(dim=1),
+            )
+
+    def forward(self, forward_xss):
+        return self.network(forward_xss)
+
     data = ImageFolder()
 
     data.image_folder('images', 100, 100)
@@ -120,14 +191,14 @@ if __name__ == '__main__':
 
     trainer = Trainer()
 
-    trainer.options.data(None)
-    trainer.options.model(None)
-    trainer.options.criterion(None)
-    trainer.options.epochs(128)
-    trainer.options.learning_rate(1e-3)
-    trainer.options.momentum(0.9)
-    trainer.options.optimize()
-    trainer.options.graph()
+    trainer.data(data)
+    trainer.model(None)
+    trainer.criterion(torch.nn.NLLLoss())
+    trainer.epochs(128)
+    trainer.learning_rate(1e-3)
+    trainer.momentum(0.9)
+    trainer.optimize()
+    trainer.graph()
 
     trainer.train()
     trainer.save('models')
