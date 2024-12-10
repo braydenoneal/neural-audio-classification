@@ -1,60 +1,27 @@
 import torch
-import torch.nn as nn
-from skimage import io
-import du.lib as dulib
-import math
-import os
+from torch.utils.data import random_split
+from torch.utils.data import DataLoader
+from torch.backends import mps
+from torch import nn
+import torchvision
+from torchvision import transforms
 
-image_size = 100
+IMAGE_SIZE = 100
+MOMENTUM = 0.9
+BATCH_SIZE = 32
+LEARNING_RATE = 1e-4
+EPOCHS = 512
 
-train_amount = 0.8
-learning_rate = 1e-4
-momentum = 0.9
-epochs = 1024
-batch_size = 64
-centered = False
-normalized = False
+transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(0.5, 0.5)])
 
-yss_dictionary = {}
-yss_list = []
-xss_list = []
+training_data, testing_data = random_split(
+    torchvision.datasets.ImageFolder(root='images', transform=transform), (24_000, 6_000)
+)
 
-print('Reading images')
+training_data_loader = DataLoader(training_data, batch_size=BATCH_SIZE, shuffle=True)
+testing_data_loader = DataLoader(testing_data, batch_size=BATCH_SIZE, shuffle=True)
 
-for subdir, dirs, files in os.walk('images'):
-    for file in files:
-        if file[-4:] == '.png':
-            yss_dictionary[subdir] = 0
-            yss_list.append(list(yss_dictionary.keys()).index(subdir))
-            xss_list.append(io.imread(os.path.join(subdir, file), as_gray=True))
-
-yss = torch.LongTensor(len(yss_list))
-xss = torch.FloatTensor(len(xss_list), image_size, image_size)
-
-for i in range(len(yss_list)):
-    yss[i] = yss_list[i]
-
-for i in range(len(xss_list)):
-    xss[i] = torch.FloatTensor(xss_list[i])
-
-random_split = torch.randperm(xss.size(0))
-train_split_amount = math.floor(xss.size(0) * train_amount)
-
-xss_train = xss[random_split][:train_split_amount]
-xss_test = xss[random_split][train_split_amount:]
-
-if centered:
-    xss_train, xss_train_means = dulib.center(xss_train)
-    xss_test, _ = dulib.center(xss_test, xss_train_means)
-
-if normalized:
-    xss_train, xss_train_stds = dulib.normalize(xss_train)
-    xss_test, _ = dulib.normalize(xss_test, xss_train_stds)
-
-yss_train = yss[random_split][:train_split_amount]
-yss_test = yss[random_split][train_split_amount:]
-
-image_dimensions = image_size * image_size
+device = 'cuda' if torch.cuda.is_available() else 'mps' if mps.is_available() else 'cpu'
 
 
 class ConvolutionalModel(nn.Module):
@@ -62,63 +29,78 @@ class ConvolutionalModel(nn.Module):
         super(ConvolutionalModel, self).__init__()
 
         self.network = nn.Sequential(
-            nn.Conv2d(in_channels=1, out_channels=20, kernel_size=5, stride=1, padding=2),
+            nn.Conv2d(in_channels=3, out_channels=20, kernel_size=5, stride=1, padding=2),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
             nn.Conv2d(in_channels=20, out_channels=50, kernel_size=5, stride=1, padding=2),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
             nn.Flatten(),
-            nn.Linear(50 * (image_size // 2 // 2) ** 2, image_dimensions),
-            nn.Linear(image_dimensions, len(yss_dictionary.keys())),
+            nn.Linear(50 * (IMAGE_SIZE // 2 // 2) ** 2, IMAGE_SIZE * IMAGE_SIZE),
+            nn.Linear(IMAGE_SIZE * IMAGE_SIZE, 10),
             nn.LogSoftmax(dim=1),
         )
 
     def forward(self, forward_xss):
-        return self.network(torch.unsqueeze(forward_xss, dim=1))
+        return self.network(forward_xss)
 
 
-model = ConvolutionalModel()
+model = ConvolutionalModel().to(device)
 criterion = nn.NLLLoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=momentum)
+optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=MOMENTUM)
 
 
-def pct_correct(xss_test_, yss_test_):
-    count = 0
+def train(data_loader, model, loss_fn, optimizer):
+    model.train()
 
-    for x, y in zip(xss_test_, yss_test_):
-        if torch.argmax(x).item() == y.item():
-            count += 1
+    size = len(data_loader.dataset)
 
-    return 100 * count / len(xss_test_)
+    for batch, (images, labels) in enumerate(data_loader):
+        images = images.to(device)
+        labels = labels.to(device)
+
+        predictions = model(images)
+        loss = loss_fn(predictions, labels)
+
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+
+        print(f'loss: {loss.item():>7f}  [{(batch + 1) * len(images):>5d}/{size}]')
 
 
-model = dulib.train(
-    model,
-    crit=criterion,
-    train_data=(xss_train, yss_train),
-    valid_data=(xss_test, yss_test),
-    learn_params=optimizer,
-    epochs=epochs,
-    bs=batch_size,
-    valid_metric=pct_correct,
-    graph=0,
-    print_lines=(-1,),
-    gpu=(-1,)
-)
+def test(data_loader, model, loss_fn):
+    model.eval()
 
-pct_training = dulib.class_accuracy(model, (xss_train, yss_train), show_cm=False)
-pct_testing = dulib.class_accuracy(model, (xss_test, yss_test), show_cm=True)
+    test_loss = 0
+    correct = 0
 
-print(
-    f'\n'
-    f'Percentage correct on training data: {100 * pct_training:.2f}\n'
-    f'Percentage correct on testing data: {100 * pct_testing:.2f}\n'
-    f'\n'
-    f'Learning Rate: {learning_rate}\n'
-    f'Momentum: {momentum}\n'
-    f'Epochs: {epochs}\n'
-    f'Batch Size: {batch_size}'
-)
+    with torch.no_grad():
+        for images, labels in data_loader:
+            images = images.to(device)
+            labels = labels.to(device)
 
-torch.jit.script(model).save('models/06.pt')
+            predictions = model(images)
+
+            test_loss += loss_fn(predictions, labels).item()
+
+            for prediction, label in zip(predictions, labels):
+                if torch.argmax(prediction).item() == label.item():
+                    correct += 1
+
+    test_loss /= len(data_loader)
+    correct /= len(data_loader.dataset)
+
+    print(f'Test Error: \n Accuracy: {(100 * correct):>0.1f}%, Avg loss: {test_loss:>8f} \n')
+
+
+print(f'Training on {device}\n')
+
+for epoch in range(EPOCHS):
+    print(f'Epoch {epoch + 1}\n-------------------------------')
+    train(training_data_loader, model, criterion, optimizer)
+    test(testing_data_loader, model, criterion)
+
+print('Done!')
+
+torch.jit.script(model).save('models/07.pt')
